@@ -1,0 +1,24 @@
+# Gateway plus an optional Prometheus that scrapes /metrics.
+#   docker compose up                      gateway only, on http://localhost:8080
+#   docker compose --profile metrics up    also Prometheus on http://localhost:9090
+services:
+  gateway:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      GATEWAY_PROVIDER: ${GATEWAY_PROVIDER:-mock}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - audit-data:/app/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ["metrics"]
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on: [gateway]
+
+volumes:
+  audit-data:

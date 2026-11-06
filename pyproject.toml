@@ -1,0 +1,37 @@
+[project]
+name = "aigateway"
+version = "1.0.0"
+description = "A policy gateway between internal apps and the Claude API: auth, budgets, rate limits, PII redaction, caching, audit log, metrics."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Nick Bitzis" }]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+claude = ["anthropic>=2.6"]
+
+[project.scripts]
+aigateway = "aigateway.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore:Using .httpx. with .starlette.testclient."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

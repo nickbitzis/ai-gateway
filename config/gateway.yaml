@@ -1,0 +1,32 @@
+# Synthetic gateway config for Northwind Labs, a made-up company.
+# Keys are demo values. In production they would be hashed and live in a secret manager.
+upstream:
+  provider: mock            # mock | anthropic
+  max_retries: 3
+  backoff_base_s: 0.2
+  backoff_max_s: 4.0
+  fallback_model: claude-haiku-5-5
+  mock_latency_ms: [40, 160]  # mock only: base latency range, plus a per-output-token cost
+
+cache:
+  ttl_s: 600
+  max_entries: 5000
+
+teams:
+  - name: checkout
+    key: gw-checkout-7f3a91
+    monthly_budget_usd: 50.00
+    requests_per_minute: 20
+    allowed_models: [claude-sonnet-5-5, claude-haiku-5-5]
+
+  - name: growth
+    key: gw-growth-2c8d40
+    monthly_budget_usd: 0.15
+    requests_per_minute: 120
+    allowed_models: [claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5]
+
+  - name: support
+    key: gw-support-91be55
+    monthly_budget_usd: 25.00
+    requests_per_minute: 120
+    allowed_models: [claude-sonnet-5-5, claude-haiku-5-5]

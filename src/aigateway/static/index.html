@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Gateway Admin</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1c2330; --muted: #5d6878; --border: #dde2e9;
+  --track: #e8ebf0; --accent: #2f6fdb; --good: #11804f; --good-soft: #e3f5ec;
+  --warn: #8a5a00; --warn-soft: #fff4dc; --bad: #b42318; --bad-soft: #fde8e6;
+  --radius: 10px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #11151c; --panel: #181e27; --text: #e6eaf0; --muted: #9aa5b5; --border: #2a3340;
+    --track: #232b37; --accent: #6c9cf0; --good: #4ccb8f; --good-soft: #15302a;
+    --warn: #f3c46b; --warn-soft: #3a2e14; --bad: #ff8a7a; --bad-soft: #3b1d1b; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+header { padding: 18px 24px 8px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.muted { color: var(--muted); }
+main { padding: 8px 24px 24px; display: grid; gap: 16px; grid-template-columns: repeat(4, 1fr); }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.kpi .v { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); margin-top: 2px; }
+.wide { grid-column: span 4; }
+.half { grid-column: span 2; }
+.team { display: grid; grid-template-columns: 110px 1fr 170px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }
+.team:first-of-type { border-top: 0; }
+.bar { height: 12px; background: var(--track); border-radius: 6px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); }
+.bar > div.hot { background: var(--warn); }
+.bar > div.over { background: var(--bad); }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; grid-column: 2 / 4; }
+.chip { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--track); color: var(--muted); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.good { background: var(--good-soft); color: var(--good); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; border-top: 0; }
+td.num, th.num { text-align: right; }
+.status { font-weight: 600; }
+.s200 { color: var(--good); } .s4xx { color: var(--warn); } .s5xx { color: var(--bad); }
+.scroll { overflow-x: auto; }
+.redrow { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--border); }
+.redrow:first-of-type { border-top: 0; }
+@media (max-width: 800px) {
+  main { grid-template-columns: 1fr 1fr; padding: 8px 16px 16px; }
+  header { padding: 16px 16px 8px; }
+  .wide, .half { grid-column: span 2; }
+  .team { grid-template-columns: 80px 1fr; }
+  .team .num { grid-column: 1 / 3; text-align: left; }
+  .chips { grid-column: 1 / 3; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Gateway</h1>
+  <span class="muted" id="meta">Loading usage...</span>
+</header>
+<main>
+  <div class="panel kpi"><div class="v" id="k-req">0</div><div class="l">Requests this month</div></div>
+  <div class="panel kpi"><div class="v" id="k-spend">$0</div><div class="l">Spend this month</div></div>
+  <div class="panel kpi"><div class="v" id="k-cache">0%</div><div class="l">Cache hit rate (of served)</div></div>
+  <div class="panel kpi"><div class="v" id="k-red">0</div><div class="l">PII items redacted</div></div>
+
+  <section class="panel half">
+    <h2>Spend vs monthly budget</h2>
+    <div id="teams"></div>
+  </section>
+  <section class="panel half">
+    <h2>Redactions by type</h2>
+    <div id="redactions"></div>
+    <h2 style="margin-top:18px">Blocked requests</h2>
+    <div id="blocked"></div>
+  </section>
+
+  <section class="panel wide">
+    <h2>Recent requests</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Time (UTC)</th><th>Team</th><th>Model</th><th>Status</th><th>Outcome</th>
+          <th class="num">In tok</th><th class="num">Out tok</th><th class="num">Cost</th>
+          <th class="num">Latency</th><th>Cache</th><th>Redacted</th><th>Prompt hash</th></tr></thead>
+        <tbody id="recent"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const usd = (n) => "$" + (n < 1 ? n.toFixed(4) : n.toFixed(2));
+
+function statusClass(s) { return s === 200 ? "s200" : s >= 500 ? "s5xx" : "s4xx"; }
+
+function render(d) {
+  const req = d.teams.reduce((a, t) => a + t.requests, 0) + d.unauthenticated;
+  const spend = d.teams.reduce((a, t) => a + t.spend_usd, 0);
+  const red = Object.values(d.redactions).reduce((a, n) => a + n, 0);
+  $("k-req").textContent = req.toLocaleString();
+  $("k-spend").textContent = usd(spend);
+  $("k-cache").textContent = (d.cache_hit_rate * 100).toFixed(1) + "%";
+  $("k-red").textContent = red.toLocaleString();
+  $("meta").textContent = `Provider: ${d.provider}. Updated ${d.generated_at.replace("T", " ").replace("+00:00", " UTC")}. Refreshes every 3 s.`;
+
+  $("teams").innerHTML = d.teams.map((t) => {
+    const pct = Math.min(100, t.budget_used_pct);
+    const cls = t.budget_used_pct >= 100 ? "over" : t.budget_used_pct >= 80 ? "hot" : "";
+    const chips = [
+      `<span class="chip good">${t.ok} served</span>`,
+      t.cache_hits ? `<span class="chip">${t.cache_hits} from cache</span>` : "",
+      t.rate_limited ? `<span class="chip warn">${t.rate_limited} rate limited</span>` : "",
+      t.budget_blocked ? `<span class="chip bad">${t.budget_blocked} over budget</span>` : "",
+      t.denied ? `<span class="chip warn">${t.denied} model denied</span>` : "",
+      t.upstream_errors ? `<span class="chip bad">${t.upstream_errors} upstream errors</span>` : "",
+    ].join("");
+    return `<div class="team"><strong>${esc(t.team)}</strong>
+      <div class="bar" title="${t.budget_used_pct}% of budget"><div class="${cls}" style="width:${pct}%"></div></div>
+      <div class="num">${usd(t.spend_usd)} / ${usd(t.budget_usd)} (${t.budget_used_pct}%)</div>
+      <div class="chips">${chips}</div></div>`;
+  }).join("");
+
+  const reds = Object.entries(d.redactions).sort((a, b) => b[1] - a[1]);
+  $("redactions").innerHTML = reds.length
+    ? reds.map(([k, n]) => `<div class="redrow"><span>${esc(k)}</span><span class="num">${n}</span></div>`).join("")
+    : `<div class="muted">No PII seen yet.</div>`;
+
+  const blocked = [
+    ["Rate limited (429)", d.teams.reduce((a, t) => a + t.rate_limited, 0)],
+    ["Budget exhausted (402)", d.teams.reduce((a, t) => a + t.budget_blocked, 0)],
+    ["Bad or missing key (401)", d.unauthenticated],
+    ["Model not allowed (403)", d.teams.reduce((a, t) => a + t.denied, 0)],
+    ["Upstream failed (502)", d.teams.reduce((a, t) => a + t.upstream_errors, 0)],
+  ];
+  $("blocked").innerHTML = blocked.map(([k, n]) => `<div class="redrow"><span>${k}</span><span class="num">${n}</span></div>`).join("");
+
+  $("recent").innerHTML = d.recent.map((r) => {
+    const reds = Object.entries(r.redactions).map(([k, n]) => `${k}:${n}`).join(" ");
+    return `<tr><td>${esc(r.ts.slice(11, 23))}</td><td>${esc(r.team)}</td><td>${esc(r.model || "")}</td>
+      <td class="status ${statusClass(r.status)}">${r.status}</td><td>${esc(r.outcome)}</td>
+      <td class="num">${r.input_tokens}</td><td class="num">${r.output_tokens}</td>
+      <td class="num">${usd(r.cost_usd)}</td><td class="num">${r.latency_ms.toFixed(1)} ms</td>
+      <td>${r.cache_hit ? "hit" : ""}</td><td>${esc(reds)}</td>
+      <td class="muted">${esc((r.prompt_sha256 || "").slice(0, 12))}</td></tr>`;
+  }).join("");
+}
+
+async function refresh() {
+  try {
+    const res = await fetch("/admin/usage");
+    render(await res.json());
+  } catch (e) {
+    $("meta").textContent = "Could not reach /admin/usage: " + e.message;
+  }
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
