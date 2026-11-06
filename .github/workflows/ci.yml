@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv sync --python 3.12
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Test
+        run: uv run pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ai-gateway:ci .
+      - name: Smoke test container
+        run: |
+          docker run -d --name gw -p 8080:8080 ai-gateway:ci
+          for i in $(seq 1 20); do curl -sf http://localhost:8080/healthz && break; sleep 1; done
+          curl -sf -H 'x-gateway-key: gw-support-91be55' -H 'content-type: application/json' \
+            -d '{"model":"claude-haiku-5-5","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}' \
+            http://localhost:8080/v1/messages
+          curl -sf http://localhost:8080/metrics | grep gateway_requests_total
+          docker rm -f gw

@@ -1,0 +1,71 @@
+name: infra
+
+on:
+  push:
+    paths: ["deploy/**", ".github/workflows/infra.yml"]
+  pull_request:
+    paths: ["deploy/**", ".github/workflows/infra.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: Format
+        run: terraform fmt -check -recursive
+      - name: Init (no backend)
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        run: terraform validate
+      - name: Test with mocked AWS provider (staging and prod tfvars)
+        run: |
+          terraform test -var-file=environments/staging.tfvars
+          terraform test -var-file=environments/prod.tfvars
+
+  tflint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+      - name: Init plugins
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Lint
+        run: tflint --recursive --config "$(pwd)/.tflint.hcl"
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint
+        run: |
+          helm lint deploy/helm/ai-gateway --strict
+          helm lint deploy/helm/ai-gateway --strict --set metrics.serviceMonitor.enabled=true --set autoscaling.enabled=false
+      - name: Template
+        run: helm template gw deploy/helm/ai-gateway --set metrics.serviceMonitor.enabled=true > /dev/null
+
+  # Security scan. Reports findings without failing the build, so it informs
+  # review instead of blocking it. Flip soft_fail to false to enforce.
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: deploy
+          framework: terraform,helm
+          soft_fail: true
