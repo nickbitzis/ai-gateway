@@ -1,0 +1,27 @@
+# Copy to terraform.tfvars (git ignored) for ad hoc runs, or use environments/*.tfvars.
+# No secrets go here: API keys and team keys live in Secrets Manager.
+
+environment = "staging"
+aws_region  = "us-east-1"
+repository  = "github.com/OWNER/ai-gateway"
+
+vpc_cidr           = "10.40.0.0/16"
+enable_nat_gateway = false
+
+alb_internal          = false
+allowed_ingress_cidrs = ["203.0.113.0/24"] # replace with your office or VPN range
+certificate_arn       = ""                 # e.g. arn:aws:acm:REGION:ACCOUNT_ID:certificate/ID
+
+image_tag        = "0.1.0"
+task_cpu         = 256
+task_memory      = 512
+gateway_provider = "mock"
+
+min_capacity = 1
+max_capacity = 2
+
+log_retention_days = 14
+
+extra_tags = {
+  Owner = "platform-team"
+}

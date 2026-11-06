@@ -1,0 +1,8 @@
+apiVersion: v2
+name: ai-gateway
+description: AI gateway in front of the Claude API, with per-team keys, budgets, rate limits, PII redaction and an audit log.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+keywords: [ai-gateway, llm, fastapi]

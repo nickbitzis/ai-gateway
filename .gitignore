@@ -11,3 +11,19 @@ build/
 *.db
 *.db-journal
 data/
+
+# Terraform: commit .terraform.lock.hcl, never state or local config
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+deploy/terraform/terraform.tfvars
+deploy/terraform/backend.hcl
+override.tf
+*_override.tf
+
+# Helm
+deploy/helm/**/charts/
+*.tgz

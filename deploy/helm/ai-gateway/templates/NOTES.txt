@@ -1,0 +1,10 @@
+AI gateway deployed as {{ include "ai-gateway.fullname" . }} (provider: {{ .Values.gateway.provider }}).
+
+The pods read Secret "{{ .Values.existingSecret.name }}" (keys {{ .Values.existingSecret.apiKeyKey }} and {{ .Values.existingSecret.configKey }}).
+Pods stay in ContainerCreating until it exists.
+
+Try it:
+  kubectl port-forward svc/{{ include "ai-gateway.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -s http://127.0.0.1:8080/healthz
+
+The audit log is an emptyDir per pod. It is lost when a pod is replaced.

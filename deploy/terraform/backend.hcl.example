@@ -1,0 +1,13 @@
+# Remote state: S3 for the state file, DynamoDB for the lock.
+# Copy to backend.hcl (git ignored), fill in, then:
+#   terraform init -backend-config=backend.hcl
+#
+# Create the bucket and table once, outside this stack (bootstrap), with
+# versioning and encryption on the bucket and LockID as the table's hash key.
+# Use one key per environment so staging and prod never share state.
+
+bucket         = "REPLACE-tfstate-bucket-name"
+key            = "ai-gateway/staging/terraform.tfstate" # or ai-gateway/prod/terraform.tfstate
+region         = "us-east-1"
+dynamodb_table = "REPLACE-tfstate-lock-table"
+encrypt        = true

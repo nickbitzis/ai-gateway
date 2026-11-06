@@ -118,6 +118,128 @@ make lint     # ruff check and ruff format --check
 
 CI (`.github/workflows/ci.yml`) runs ruff and pytest, then builds the Docker image, starts it, and sends one request through it.
 
+## Deploy
+
+Infrastructure as code lives in `deploy/`: Terraform for AWS (ECS Fargate), and a Helm chart for teams that run Kubernetes. Nothing here has been applied to a real AWS account or cluster. See "What was validated" below.
+
+### AWS architecture
+
+```
+ internal apps                         VPC (2 AZs)
+ (office/VPN CIDRs) ──443──▶ ┌──────────────────────────────────────────────────────────┐
+                             │ public subnets    ALB (HTTPS listener if certificate_arn │
+                             │                   is set, port 80 redirects)             │
+                             │                   target group health check: /healthz    │
+                             │                        │ :8080, from the ALB SG only     │
+                             │ private subnets   ECS Fargate service, 1 to N tasks      │
+                             │                   read-only root FS, user 10001          │
+                             │                   autoscaling on CPU and requests/target │
+                             │                        │ 443 out only                    │
+                             │ public subnets    NAT gateway (optional)                 │
+                             └────────────────────────┼─────────────────────────────────┘
+                                                      ▼
+                                              Anthropic API
+
+ Secrets Manager ──(execution role, at task start)──▶ ANTHROPIC_API_KEY, GATEWAY_CONFIG_YAML
+ ECR (scan on push, immutable tags, lifecycle) ──▶ image pull
+ tasks ──awslogs──▶ CloudWatch Logs (/ecs/<name>, retention set per environment)
+```
+
+| Module | What it creates |
+|---|---|
+| `deploy/terraform/modules/network` | VPC, two public and two private subnets across two AZs, internet gateway, one NAT gateway behind `enable_nat_gateway`, a locked down default security group |
+| `deploy/terraform/modules/secrets` | Two Secrets Manager secrets: the Anthropic API key and the gateway config (team keys, budgets, limits). Terraform creates the containers only, so values never enter state |
+| `deploy/terraform/modules/service` | ECR repository, ECS cluster, task definition with the container health check, CloudWatch log group, ALB and target group, security groups, IAM roles, autoscaling |
+
+Design choices worth knowing:
+
+- **Secrets** reach the container through the task definition's `secrets` block, never `environment`. The gateway reads its team config from a file, so the container start command writes `GATEWAY_CONFIG_YAML` to `/tmp/gateway.yaml`, unsets the variable, then starts the app. No Python code changed for this.
+- **IAM** is split in two. The execution role (used by the ECS agent) can pull from this one ECR repository, write to this one log group, and read these two secrets. The task role (what the app runs as) has no permissions, because the gateway makes no AWS calls. Both trust policies are limited to ECS tasks in the same account.
+- **Without NAT** (`enable_nat_gateway = false`, staging default), tasks run in the public subnets with a public IP so they can still reach ECR and the Anthropic API. Their security group accepts traffic only from the ALB, so they are not reachable from the internet. Prod uses private subnets and the NAT gateway.
+- **Deploys** use the ECS circuit breaker with automatic rollback, 100% minimum healthy, and image tags that cannot be overwritten (`latest` is rejected by a validation rule).
+- **Tags**: every resource gets `Project`, `Environment`, `ManagedBy` and `Repository` through the provider's `default_tags`.
+
+### The audit log on Fargate
+
+The SQLite audit log does **not** survive a task restart on Fargate. `/app/data` is task-local scratch storage, so a new task starts with an empty log, and that also resets each team's month spend, which the budget check reads from that log. With more than one task, each task also has its own log and its own view of spend.
+
+I chose not to add an EFS volume. The gateway opens SQLite in WAL mode, and WAL relies on shared memory that does not work across network file systems, so EFS would trade a visible problem for silent corruption risk. The production path is **RDS for PostgreSQL** (Multi-AZ in prod) as the audit store, which also gives every task one shared view of spend. That is a code change in `audit.py` (a Postgres implementation of the same insert and month-spend queries) plus a `database` module here; neither is in this repo yet. Until then, treat the AWS deployment as stateless and the budgets as per-task and best effort.
+
+### Commands
+
+Requires Terraform 1.6 or newer (the tests need 1.7 or newer), AWS credentials, and an existing S3 bucket and DynamoDB table for state.
+
+```bash
+cd deploy/terraform
+cp backend.hcl.example backend.hcl          # fill in bucket, key, region, lock table
+terraform init -backend-config=backend.hcl
+
+# 1. Create the ECR repository and secrets first, so there is somewhere to push.
+terraform apply -var-file=environments/staging.tfvars \
+  -target=module.service.aws_ecr_repository.this -target=module.secrets
+
+# 2. Fill the secrets (values go straight to AWS, never into Terraform state).
+aws secretsmanager put-secret-value --secret-id ai-gateway-staging/anthropic-api-key \
+  --secret-string "$ANTHROPIC_API_KEY"
+aws secretsmanager put-secret-value --secret-id ai-gateway-staging/gateway-config \
+  --secret-string file://../../config/gateway.yaml   # use real team keys, not the demo ones
+
+# 3. Build and push an image tagged with the git SHA (CI would normally do this).
+REPO=$(terraform output -raw ecr_repository_url)
+TAG=$(git rev-parse --short HEAD)
+aws ecr get-login-password | docker login --username AWS --password-stdin "${REPO%%/*}"
+docker build -t "$REPO:$TAG" ../.. && docker push "$REPO:$TAG"
+
+# 4. Everything else.
+terraform apply -var-file=environments/staging.tfvars -var image_tag="$TAG"
+curl -s "$(terraform output -raw gateway_url)/healthz"
+```
+
+Prod is the same with `environments/prod.tfvars`, a separate state key in `backend.hcl`, and `-var certificate_arn=...` (a check block warns if prod is planned without one).
+
+Kubernetes instead of ECS:
+
+```bash
+kubectl create secret generic ai-gateway \
+  --from-literal=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  --from-file=gateway.yaml=config/gateway.yaml
+helm install gw deploy/helm/ai-gateway \
+  --set image.repository=<registry>/ai-gateway --set image.tag="$TAG" \
+  --set metrics.serviceMonitor.enabled=true    # if the Prometheus Operator is installed
+```
+
+The chart runs pods as user 10001 with a read-only root filesystem, all capabilities dropped, and no service account token. It adds startup, readiness and liveness probes on `/healthz`, an HPA (2 to 6 pods on CPU), a PodDisruptionBudget, zone spreading, and an optional ServiceMonitor. Secrets are referenced by name (`existingSecret`); the chart never creates them. Every value is documented in `deploy/helm/ai-gateway/values.yaml`.
+
+### Rough monthly cost, staging
+
+About **$40 a month**, or about **$74 with the NAT gateway on**. Assumptions: us-east-1 on-demand list prices, the `staging.tfvars` shape (one task at 0.25 vCPU and 0.5 GB running all month, no NAT, internet-facing ALB), light traffic, and no Claude API usage (that is billed separately and is the real cost driver).
+
+| Item | Basis | Per month |
+|---|---|---|
+| ALB | $0.0225 per hour plus under 1 LCU | about $18 |
+| Fargate | 0.25 vCPU at $0.04048 and 0.5 GB at $0.004445 per hour | about $9 |
+| Public IPv4 | 2 for the ALB, 1 for the task, $0.005 per hour each | about $11 |
+| Secrets Manager | 2 secrets at $0.40 | under $1 |
+| CloudWatch Logs, ECR, data transfer | about 1 GB of logs, a few image versions | about $2 |
+| NAT gateway (if on) | $0.045 per hour plus $0.045 per GB processed | adds about $33 plus data |
+
+Check current prices in the AWS Pricing Calculator before relying on these.
+
+### What was validated, and what was not
+
+Run locally on macOS with official binaries (SHA256 checked against the published sums): Terraform 1.17.1 and Helm 4.3.1.
+
+- `terraform fmt -check -recursive`: clean.
+- `terraform init -backend=false` and `terraform validate`: valid, with AWS provider 5.100.0 (lock file committed with hashes for linux_amd64, darwin_amd64 and darwin_arm64).
+- `terraform test` (`deploy/terraform/tests/wiring.tftest.hcl`): 4 runs pass with each of `staging.tfvars` and `prod.tfvars`, against a **mocked** AWS provider. They check two public and two private subnets, no NAT gateway in staging and one in prod, an HTTP URL without a certificate and HTTPS with one, and that `image_tag = "latest"` and an unknown environment are rejected.
+- `helm lint --strict` (with the ServiceMonitor on and off) and `helm template`: pass, and the rendered manifests parse as YAML.
+
+Not validated: no `terraform plan` or `apply` against a real AWS account (so AWS has not confirmed the resources, quotas, or IAM policies), no install on a real Kubernetes cluster, and no Docker build on this machine. tflint and checkov run only in CI (`.github/workflows/infra.yml`), with checkov set to report without failing.
+
+```bash
+make infra-check    # terraform fmt, validate, test, and helm lint (needs terraform and helm on PATH)
+```
+
 ## Production notes
 
 - Rate limit buckets and the cache live in process memory. With more than one replica, move both to Redis (a Lua script for the token bucket) so limits hold across instances.

@@ -1,0 +1,116 @@
+# Default values for the ai-gateway chart.
+
+# -- Number of pods when autoscaling is off. Ignored when autoscaling.enabled is true.
+replicaCount: 2
+
+image:
+  # -- Image repository, for example an ECR or GHCR path.
+  repository: ghcr.io/OWNER/ai-gateway
+  # -- Image tag. Defaults to the chart appVersion. Use the git SHA in practice.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Pull secrets for a private registry.
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a dedicated service account. The gateway makes no Kubernetes API calls.
+  create: true
+  name: ""
+  annotations: {}
+
+# -- Gateway settings passed as plain environment variables. Nothing secret goes here.
+gateway:
+  # -- mock (no upstream calls) or anthropic.
+  provider: mock
+  port: 8080
+
+# Secrets are never created by this chart. Create them yourself (or with External
+# Secrets Operator, Sealed Secrets, or the CSI driver) and point the chart at them:
+#
+#   kubectl create secret generic ai-gateway \
+#     --from-literal=ANTHROPIC_API_KEY=... \
+#     --from-file=gateway.yaml=config/gateway.yaml
+existingSecret:
+  # -- Name of the Secret holding the API key and the gateway config.
+  name: ai-gateway
+  # -- Key in the Secret with the Anthropic API key, injected as ANTHROPIC_API_KEY.
+  apiKeyKey: ANTHROPIC_API_KEY
+  # -- Key in the Secret with the gateway.yaml (teams, keys, budgets), mounted as a file.
+  configKey: gateway.yaml
+
+service:
+  type: ClusterIP
+  port: 80
+
+# -- Requests and limits. The gateway is I/O bound; most time is spent waiting on the upstream.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+probes:
+  # -- Startup probe gives the app up to 30 seconds to come up before liveness starts.
+  startup:
+    periodSeconds: 2
+    failureThreshold: 15
+  readiness:
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    periodSeconds: 15
+    failureThreshold: 3
+
+# -- Scratch volume for the SQLite audit log. emptyDir is lost when the pod goes away,
+# and every pod keeps its own log and budget totals. See the README for the production path.
+auditStorage:
+  sizeLimit: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  # -- Keep at least this many pods during node drains.
+  minAvailable: 1
+
+metrics:
+  serviceMonitor:
+    # -- Create a ServiceMonitor for the Prometheus Operator. Needs its CRDs installed.
+    enabled: false
+    interval: 30s
+    # -- Extra labels so your Prometheus instance selects this ServiceMonitor.
+    labels: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Spread pods across zones when the cluster has more than one.
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
